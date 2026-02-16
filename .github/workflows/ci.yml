@@ -17,13 +17,10 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: services/agent-core/package.json
+          cache-dependency-path: package-lock.json
 
       - name: Install
-        working-directory: services/agent-core
         run: npm install
 
       - name: Run checks
-        working-directory: services/agent-core
         run: npm run check
-
