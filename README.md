@@ -25,6 +25,7 @@ This lets teams deploy the same agents in their own environment without forcing 
 - `POST /v1/agent-core/workflows/run`
 - `GET /v1/agent-core/workflows/runs`
 - `GET /v1/agent-core/workflows/runs/{runId}`
+- `POST /v1/agent-core/workflows/runs/{runId}/resume`
 
 ## Included Agents
 
@@ -133,6 +134,30 @@ Use:
 - `GET /v1/agent-core/workflows/runs?limit=50`
 - `GET /v1/agent-core/workflows/runs/{runId}`
 
+Run list supports filters:
+
+- `status`
+- `projectId`
+- `from` (ISO timestamp)
+- `to` (ISO timestamp)
+
+Resume a run:
+
+```bash
+curl -X POST http://localhost:4001/v1/agent-core/workflows/runs/<runId>/resume \
+  -H "Content-Type: application/json" \
+  -d '{
+    "retryPolicy": { "maxAttempts": 3, "backoffMs": 300 },
+    "execution": {
+      "approvalMode": "execute",
+      "approvals": [
+        {"scope":"workflow_execute","group":"CAB","status":"approved","required":true},
+        {"scope":"deployment_execute","group":"Release","status":"approved","required":true}
+      ]
+    }
+  }'
+```
+
 ## Approval Gates and Tool Execution
 
 Workflow execution supports:
@@ -145,6 +170,17 @@ Workflow execution supports:
 - `executeTools` and `enabledTools` for controlled tool execution
 
 When required approvals are missing in `execute` mode, workflow summary includes blocking reasons and returns a hold recommendation.
+
+Tool execution uses policy-backed backend config in `config/policy.default.json`.
+Supported backend today: `http_json` (POST to endpoint from env var).
+
+Example env vars:
+
+- `TOOL_PROJECT_PLAN_SYNC_URL`
+- `TOOL_TEST_EXECUTION_RUN_URL`
+- `TOOL_CERT_REPORT_PUBLISH_URL`
+- `TOOL_STAKEHOLDER_STATUS_PUBLISH_URL`
+
 
 
 ## Extending

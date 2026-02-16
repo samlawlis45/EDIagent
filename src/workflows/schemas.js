@@ -163,6 +163,38 @@ export const runWorkflowSchema = z.object({
         required: z.boolean().optional(),
         status: z.enum(['approved', 'pending', 'rejected'])
       })).default([])
-    }).default({})
+    }).default({}),
+    retryPolicy: z.object({
+      maxAttempts: z.number().int().min(1).max(10).default(3),
+      backoffMs: z.number().int().min(0).max(10000).default(250)
+    }).optional()
   })
+});
+
+export const resumeWorkflowSchema = z.object({
+  execution: z.object({
+    approvalMode: z.enum(['propose_only', 'execute']).optional(),
+    executeTools: z.boolean().optional(),
+    enabledTools: z.array(z.string()).optional(),
+    approvals: z.array(z.object({
+      scope: z.enum(['workflow_execute', 'deployment_execute', 'post_production_escalation_execute']),
+      group: z.string().min(1),
+      required: z.boolean().optional(),
+      status: z.enum(['approved', 'pending', 'rejected'])
+    })).optional()
+  }).optional(),
+  retryPolicy: z.object({
+    maxAttempts: z.number().int().min(1).max(10).optional(),
+    backoffMs: z.number().int().min(0).max(10000).optional()
+  }).optional(),
+  fromStep: z.enum([
+    'integration_program',
+    'onboarding',
+    'spec_analysis',
+    'mapping_engineer',
+    'test_certification',
+    'deployment_readiness',
+    'standards_architecture',
+    'post_production_escalation'
+  ]).optional()
 });

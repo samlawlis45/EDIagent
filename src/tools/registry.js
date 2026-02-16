@@ -1,4 +1,6 @@
 import { getToolAdapter } from './adapter-registry.js';
+import { getToolBackendConfig } from '../policy/engine.js';
+import { callHttpJsonBackend } from './backends/http-json-backend.js';
 
 function pickFields(source, requiredInputs = []) {
   const payload = {};
@@ -57,7 +59,26 @@ const toolHandlers = {
   })
 };
 
-export function executeToolContracts(args) {
+async function executeToolWithBackend(toolName, transformedPayload) {
+  const backendConfig = getToolBackendConfig(toolName);
+  if (!backendConfig) {
+    return {
+      status: 'unsupported',
+      reason: 'No backend configured in policy'
+    };
+  }
+
+  if (backendConfig.type === 'http_json') {
+    return callHttpJsonBackend(backendConfig, transformedPayload);
+  }
+
+  return {
+    status: 'unsupported',
+    reason: `Unsupported backend type: ${backendConfig.type}`
+  };
+}
+
+export async function executeToolContracts(args) {
   const {
     adapterId,
     contracts = [],
@@ -101,13 +122,15 @@ export function executeToolContracts(args) {
     }
 
     const output = handler({ context, contract });
+    const transformed = adapter.transform(contract.tool, output);
+    const backendResult = await executeToolWithBackend(contract.tool, transformed);
     results.push({
       tool: contract.tool,
-      status: 'executed',
-      output: adapter.transform(contract.tool, output)
+      status: backendResult.status,
+      output: transformed,
+      backend: backendResult
     });
   }
 
   return results;
 }
-

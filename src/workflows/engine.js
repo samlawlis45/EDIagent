@@ -1,4 +1,7 @@
-import { runNewPartnerImplementationWorkflow } from './new-partner-implementation-workflow.js';
+import {
+  resumeNewPartnerImplementationWorkflow,
+  runNewPartnerImplementationWorkflow
+} from './new-partner-implementation-workflow.js';
 import { getWorkflowRunById, listWorkflowRuns } from '../persistence/workflow-store.js';
 
 const SUPPORTED_WORKFLOWS = [
@@ -14,7 +17,7 @@ export function getWorkflowCapabilities() {
   };
 }
 
-export function runWorkflow(request) {
+export async function runWorkflow(request) {
   if (request.workflow === 'new_partner_implementation') {
     return runNewPartnerImplementationWorkflow({
       adapterId: request.adapter,
@@ -29,6 +32,17 @@ export function getWorkflowRun(runId) {
   return getWorkflowRunById(runId);
 }
 
-export function getWorkflowRuns(limit = 50) {
-  return listWorkflowRuns(limit);
+export function getWorkflowRuns(filters = {}) {
+  return listWorkflowRuns(filters);
+}
+
+export async function resumeWorkflowRun(runId, override = {}) {
+  const run = getWorkflowRunById(runId);
+  if (!run) {
+    throw new Error(`Workflow run not found: ${runId}`);
+  }
+  if (run.workflow === 'new_partner_implementation') {
+    return resumeNewPartnerImplementationWorkflow({ runId, override });
+  }
+  throw new Error(`Resume unsupported for workflow: ${run.workflow}`);
 }

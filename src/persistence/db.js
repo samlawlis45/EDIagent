@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS workflow_steps (
   id TEXT PRIMARY KEY,
   workflow_run_id TEXT NOT NULL,
   step_name TEXT NOT NULL,
+  attempt INTEGER NOT NULL DEFAULT 1,
   status TEXT NOT NULL,
   output_json TEXT,
   started_at TEXT NOT NULL,
@@ -54,6 +55,15 @@ CREATE INDEX IF NOT EXISTS idx_workflow_steps_run_id ON workflow_steps(workflow_
 CREATE INDEX IF NOT EXISTS idx_workflow_events_run_id ON workflow_events(workflow_run_id);
 `);
 
+function ensureColumn(tableName, columnName, ddl) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (!columns.some((column) => column.name === columnName)) {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${ddl}`);
+  }
+}
+
+ensureColumn('workflow_steps', 'attempt', 'attempt INTEGER NOT NULL DEFAULT 1');
+
 export function getDb() {
   return db;
 }
@@ -61,4 +71,3 @@ export function getDb() {
 export function getDbPath() {
   return dbPath;
 }
-

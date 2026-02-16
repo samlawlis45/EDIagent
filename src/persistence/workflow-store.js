@@ -63,24 +63,48 @@ export function completeWorkflowRun(runId, summary) {
   return completedAt;
 }
 
+export function updateWorkflowRunInput(runId, nextInput) {
+  const db = getDb();
+  db.prepare(`
+    UPDATE workflow_runs
+    SET input_json = @inputJson
+    WHERE id = @id
+  `).run({
+    id: runId,
+    inputJson: JSON.stringify(nextInput)
+  });
+}
+
+function getNextStepAttempt(runId, stepName) {
+  const db = getDb();
+  const row = db.prepare(`
+    SELECT MAX(attempt) AS max_attempt
+    FROM workflow_steps
+    WHERE workflow_run_id = ? AND step_name = ?
+  `).get(runId, stepName);
+  return Number(row?.max_attempt ?? 0) + 1;
+}
+
 export function createWorkflowStep(runId, stepName) {
   const db = getDb();
   const id = crypto.randomUUID();
   const startedAt = nowIso();
+  const attempt = getNextStepAttempt(runId, stepName);
 
   db.prepare(`
     INSERT INTO workflow_steps
-      (id, workflow_run_id, step_name, status, started_at)
+      (id, workflow_run_id, step_name, attempt, status, started_at)
     VALUES
-      (@id, @runId, @stepName, 'running', @startedAt)
+      (@id, @runId, @stepName, @attempt, 'running', @startedAt)
   `).run({
     id,
     runId,
     stepName,
+    attempt,
     startedAt
   });
 
-  return { id, startedAt };
+  return { id, startedAt, attempt };
 }
 
 export function completeWorkflowStep(stepId, status, output = null, error = null) {
@@ -128,7 +152,7 @@ export function getWorkflowRunById(runId) {
   const steps = db.prepare(`
     SELECT * FROM workflow_steps
     WHERE workflow_run_id = ?
-    ORDER BY started_at ASC
+    ORDER BY started_at ASC, attempt ASC
   `).all(runId);
 
   const events = db.prepare(`
@@ -154,6 +178,7 @@ export function getWorkflowRunById(runId) {
     steps: steps.map((step) => ({
       id: step.id,
       stepName: step.step_name,
+      attempt: step.attempt,
       status: step.status,
       output: parseJson(step.output_json, null),
       startedAt: step.started_at,
@@ -169,8 +194,36 @@ export function getWorkflowRunById(runId) {
   };
 }
 
-export function listWorkflowRuns(limit = 50) {
+export function listWorkflowRuns(args = {}) {
+  const {
+    limit = 50,
+    status,
+    projectId,
+    from,
+    to
+  } = args;
   const db = getDb();
+  const where = [];
+  const params = [];
+
+  if (status) {
+    where.push('status = ?');
+    params.push(status);
+  }
+  if (projectId) {
+    where.push('project_id = ?');
+    params.push(projectId);
+  }
+  if (from) {
+    where.push('created_at >= ?');
+    params.push(from);
+  }
+  if (to) {
+    where.push('created_at <= ?');
+    params.push(to);
+  }
+
+  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const rows = db.prepare(`
     SELECT
       id,
@@ -185,9 +238,10 @@ export function listWorkflowRuns(limit = 50) {
       created_at,
       completed_at
     FROM workflow_runs
+    ${whereClause}
     ORDER BY created_at DESC
     LIMIT ?
-  `).all(Math.min(Math.max(limit, 1), 200));
+  `).all(...params, Math.min(Math.max(limit, 1), 200));
 
   return rows.map((run) => ({
     id: run.id,
@@ -204,3 +258,18 @@ export function listWorkflowRuns(limit = 50) {
   }));
 }
 
+export function getLatestStepStates(runId) {
+  const db = getDb();
+  const steps = db.prepare(`
+    SELECT *
+    FROM workflow_steps
+    WHERE workflow_run_id = ?
+    ORDER BY started_at ASC, attempt ASC
+  `).all(runId);
+
+  const latestByStep = new Map();
+  for (const step of steps) {
+    latestByStep.set(step.step_name, step);
+  }
+  return latestByStep;
+}

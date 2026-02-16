@@ -11,9 +11,98 @@ import {
   completeWorkflowStep,
   createWorkflowEvent,
   createWorkflowRun,
-  createWorkflowStep
+  createWorkflowStep,
+  getLatestStepStates,
+  getWorkflowRunById,
+  updateWorkflowRunInput
 } from '../persistence/workflow-store.js';
+import { resolveExecutionConfig } from '../policy/engine.js';
 import { executeToolContracts } from '../tools/registry.js';
+
+const WORKFLOW_STEPS = [
+  'integration_program',
+  'onboarding',
+  'spec_analysis',
+  'mapping_engineer',
+  'test_certification',
+  'deployment_readiness',
+  'standards_architecture',
+  'post_production_escalation'
+];
+
+const STEP_RUNNERS = {
+  integration_program: (input) =>
+    runIntegrationProgramAgent({
+      projectId: input.projectId,
+      projectName: input.projectName,
+      priority: input.program.priority,
+      budget: input.program.budget,
+      timeline: input.program.timeline,
+      milestones: input.program.milestones,
+      risks: input.program.risks,
+      dependencies: input.program.dependencies,
+      stakeholders: input.program.stakeholders
+    }),
+  onboarding: (input) =>
+    runOnboardingAgent({
+      partnerName: input.partnerName,
+      connectionType: input.connectionType,
+      targetDocumentTypes: input.targetDocumentTypes
+    }),
+  spec_analysis: (input) =>
+    runSpecAnalysisAgent({
+      projectId: input.projectId,
+      partnerName: input.partnerName,
+      documentTypes: input.targetDocumentTypes,
+      businessRules: input.businessRules,
+      sourceSchema: input.sourceSchema,
+      targetSchema: input.targetSchema
+    }),
+  mapping_engineer: (input) =>
+    runMappingEngineerAgent({
+      projectId: input.projectId,
+      partnerId: input.partnerId,
+      documentType: input.documentType,
+      mappingIntent: input.mappingIntent
+    }),
+  test_certification: (input) =>
+    runTestCertificationAgent({
+      projectId: input.projectId,
+      documentType: input.documentType,
+      testResults: input.test.results,
+      certificationCriteria: input.test.certificationCriteria,
+      defectSummary: input.test.defectSummary,
+      partnerCertification: input.test.partnerCertification
+    }),
+  deployment_readiness: (input) =>
+    runDeploymentReadinessAgent({
+      projectId: input.projectId,
+      environment: input.deployment.environment,
+      checklist: input.deployment.checklist,
+      approvals: input.deployment.approvals
+    }),
+  standards_architecture: (input) =>
+    runStandardsArchitectureAgent({
+      projectId: input.projectId,
+      artifacts: input.standards.artifacts,
+      standardsChecklist: input.standards.checklist,
+      architectureDecisions: input.standards.architectureDecisions,
+      reuseTargets: input.standards.reuseTargets
+    }),
+  post_production_escalation: (input) => {
+    if (!input.postProduction.enabled) return null;
+    return runPostProductionEscalationAgent({
+      incidentId: input.postProduction.incidentId ?? `${input.projectId}-post-go-live`,
+      projectId: input.projectId,
+      severity: input.postProduction.severity ?? 'P3',
+      symptoms: input.postProduction.symptoms,
+      affectedPartners: input.postProduction.affectedPartners,
+      runbookSteps: input.postProduction.runbookSteps,
+      recentChanges: input.postProduction.recentChanges,
+      metrics: input.postProduction.metrics
+    });
+  }
+};
 
 function isScopeApproved(approvals, scope) {
   const required = approvals.filter((approval) => approval.scope === scope && approval.required !== false);
@@ -21,280 +110,222 @@ function isScopeApproved(approvals, scope) {
   return required.every((approval) => approval.status === 'approved');
 }
 
-function runStep({ runId, stepName, fn, adapterId, workflowInput, executionConfig }) {
-  const step = createWorkflowStep(runId, stepName);
-  createWorkflowEvent(runId, 'workflow.step.started', { stepName, stepId: step.id });
-
-  try {
-    const output = fn();
-    const toolContracts = Array.isArray(output?.toolContracts) ? output.toolContracts : [];
-    const toolResults = executeToolContracts({
-      adapterId,
-      contracts: toolContracts,
-      context: {
-        workflowInput,
-        latestStepOutput: output
-      },
-      executeTools: executionConfig.approvalMode === 'execute' && executionConfig.executeTools,
-      enabledTools: executionConfig.enabledTools
-    });
-
-    const finalOutput = {
-      ...output,
-      toolExecution: toolResults
-    };
-
-    completeWorkflowStep(step.id, 'completed', finalOutput);
-    createWorkflowEvent(runId, 'workflow.step.completed', {
-      stepName,
-      stepId: step.id,
-      toolExecution: toolResults
-    });
-
-    return finalOutput;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    completeWorkflowStep(step.id, 'failed', null, message);
-    createWorkflowEvent(runId, 'workflow.step.failed', { stepName, stepId: step.id, error: message });
-    throw error;
-  }
+function mergeExecutionOverride(input, override) {
+  if (!override) return input;
+  return {
+    ...input,
+    execution: {
+      ...input.execution,
+      ...override,
+      approvals: override.approvals ?? input.execution.approvals,
+      enabledTools: override.enabledTools ?? input.execution.enabledTools
+    }
+  };
 }
 
-export function runNewPartnerImplementationWorkflow(args) {
-  const {
-    adapterId,
-    workflowInput
-  } = args;
-  const executionConfig = {
-    approvalMode: workflowInput.execution.approvalMode,
-    executeTools: workflowInput.execution.executeTools,
-    enabledTools: workflowInput.execution.enabledTools,
-    approvals: workflowInput.execution.approvals
+function mergeRetryPolicy(input, override) {
+  if (!override) return input;
+  return {
+    ...input,
+    retryPolicy: {
+      ...(input.retryPolicy ?? {}),
+      ...override
+    }
   };
+}
 
+async function sleep(ms) {
+  if (!ms) return;
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runStep({ runId, stepName, adapterId, workflowInput, executionConfig, retryPolicy }) {
+  const maxAttempts = retryPolicy.maxAttempts ?? 3;
+  const backoffMs = retryPolicy.backoffMs ?? 250;
+  let attempt = 0;
+  let lastError = null;
+
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    const step = createWorkflowStep(runId, stepName);
+    createWorkflowEvent(runId, 'workflow.step.started', { stepName, stepId: step.id, attempt: step.attempt });
+
+    try {
+      const raw = STEP_RUNNERS[stepName](workflowInput);
+      if (raw === null) {
+        completeWorkflowStep(step.id, 'completed', null);
+        createWorkflowEvent(runId, 'workflow.step.skipped', { stepName, reason: 'not_enabled' });
+        return null;
+      }
+
+      const toolContracts = Array.isArray(raw?.toolContracts) ? raw.toolContracts : [];
+      const toolResults = await executeToolContracts({
+        adapterId,
+        contracts: toolContracts,
+        context: {
+          workflowInput,
+          latestStepOutput: raw
+        },
+        executeTools: executionConfig.approvalMode === 'execute' && executionConfig.executeTools,
+        enabledTools: executionConfig.enabledTools
+      });
+
+      const finalOutput = {
+        ...raw,
+        toolExecution: toolResults
+      };
+
+      completeWorkflowStep(step.id, 'completed', finalOutput);
+      createWorkflowEvent(runId, 'workflow.step.completed', {
+        stepName,
+        stepId: step.id,
+        attempt: step.attempt,
+        toolExecution: toolResults
+      });
+      return finalOutput;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      lastError = message;
+      const status = attempt >= maxAttempts ? 'failed' : 'retrying';
+      completeWorkflowStep(step.id, status, null, message);
+      createWorkflowEvent(runId, 'workflow.step.failed', {
+        stepName,
+        stepId: step.id,
+        attempt: step.attempt,
+        status,
+        error: message
+      });
+      if (attempt < maxAttempts) {
+        await sleep(backoffMs * attempt);
+      }
+    }
+  }
+
+  throw new Error(`Step ${stepName} failed after ${maxAttempts} attempts: ${lastError ?? 'unknown error'}`);
+}
+
+function selectStepsToRun(input, fromStep) {
+  const enabled = input.postProduction.enabled
+    ? WORKFLOW_STEPS
+    : WORKFLOW_STEPS.filter((step) => step !== 'post_production_escalation');
+
+  if (!fromStep) return enabled;
+  const index = enabled.indexOf(fromStep);
+  if (index === -1) return enabled;
+  return enabled.slice(index);
+}
+
+function buildSummary(outputs, executionConfig, workflowRules) {
+  const blockingReasons = [];
+
+  if (outputs.testCertification?.certificationDecision === 'not_ready') {
+    blockingReasons.push('test_certification_not_ready');
+  }
+  if (outputs.deploymentReadiness?.releaseDecision === 'hold') {
+    blockingReasons.push('deployment_readiness_hold');
+  }
+  if (outputs.standardsArchitecture?.approvalRecommendation === 'revise') {
+    blockingReasons.push('standards_review_requires_revision');
+  }
+  if (outputs.integrationProgram?.escalationNeeded) {
+    blockingReasons.push('integration_program_escalation_required');
+  }
+
+  if (executionConfig.approvalMode === 'execute') {
+    for (const scope of workflowRules.executeScopes ?? []) {
+      if (!isScopeApproved(executionConfig.approvals, scope)) {
+        blockingReasons.push(`${scope}_approval_missing`);
+      }
+    }
+    if (outputs.postProductionEscalation && workflowRules.postProductionScope) {
+      if (!isScopeApproved(executionConfig.approvals, workflowRules.postProductionScope)) {
+        blockingReasons.push(`${workflowRules.postProductionScope}_approval_missing`);
+      }
+    }
+  }
+
+  return {
+    goLiveRecommendation: blockingReasons.length ? 'hold' : 'proceed',
+    blockingReasons
+  };
+}
+
+async function executeWorkflow({ runId, adapterId, workflowInput, fromStep }) {
+  const { execution: executionConfig, workflowRules, retryPolicy } = resolveExecutionConfig(
+    'new_partner_implementation',
+    workflowInput
+  );
+  const stepsToRun = selectStepsToRun(workflowInput, fromStep);
+  const outputs = {};
+
+  for (const stepName of stepsToRun) {
+    const result = await runStep({
+      runId,
+      stepName,
+      adapterId,
+      workflowInput,
+      executionConfig,
+      retryPolicy
+    });
+    if (stepName === 'integration_program') outputs.integrationProgram = result;
+    if (stepName === 'onboarding') outputs.onboarding = result;
+    if (stepName === 'spec_analysis') outputs.specAnalysis = result;
+    if (stepName === 'mapping_engineer') outputs.mappingEngineer = result;
+    if (stepName === 'test_certification') outputs.testCertification = result;
+    if (stepName === 'deployment_readiness') outputs.deploymentReadiness = result;
+    if (stepName === 'standards_architecture') outputs.standardsArchitecture = result;
+    if (stepName === 'post_production_escalation') outputs.postProductionEscalation = result;
+  }
+
+  const summary = buildSummary(outputs, executionConfig, workflowRules);
+  return {
+    executedSteps: stepsToRun,
+    outputs,
+    summary
+  };
+}
+
+export async function runNewPartnerImplementationWorkflow({ adapterId, workflowInput }) {
+  const { execution } = resolveExecutionConfig('new_partner_implementation', workflowInput);
   const run = createWorkflowRun({
     workflow: 'new_partner_implementation',
     adapter: adapterId,
     projectId: workflowInput.projectId,
     partnerName: workflowInput.partnerName,
-    approvalMode: executionConfig.approvalMode,
+    approvalMode: execution.approvalMode,
     input: workflowInput
   });
   const runId = run.id;
   createWorkflowEvent(runId, 'workflow.run.started', {
     workflow: 'new_partner_implementation',
     projectId: workflowInput.projectId,
-    approvalMode: executionConfig.approvalMode
+    approvalMode: execution.approvalMode
   });
 
   try {
-    const integrationProgram = runStep({
+    const executionResult = await executeWorkflow({
       runId,
-      stepName: 'integration_program',
-      fn: () =>
-        runIntegrationProgramAgent({
-          projectId: workflowInput.projectId,
-          projectName: workflowInput.projectName,
-          priority: workflowInput.program.priority,
-          budget: workflowInput.program.budget,
-          timeline: workflowInput.program.timeline,
-          milestones: workflowInput.program.milestones,
-          risks: workflowInput.program.risks,
-          dependencies: workflowInput.program.dependencies,
-          stakeholders: workflowInput.program.stakeholders
-        }),
       adapterId,
-      workflowInput,
-      executionConfig
+      workflowInput
     });
 
-    const onboarding = runStep({
-      runId,
-      stepName: 'onboarding',
-      fn: () =>
-        runOnboardingAgent({
-          partnerName: workflowInput.partnerName,
-          connectionType: workflowInput.connectionType,
-          targetDocumentTypes: workflowInput.targetDocumentTypes
-        }),
-      adapterId,
-      workflowInput,
-      executionConfig
-    });
-
-    const specAnalysis = runStep({
-      runId,
-      stepName: 'spec_analysis',
-      fn: () =>
-        runSpecAnalysisAgent({
-          projectId: workflowInput.projectId,
-          partnerName: workflowInput.partnerName,
-          documentTypes: workflowInput.targetDocumentTypes,
-          businessRules: workflowInput.businessRules,
-          sourceSchema: workflowInput.sourceSchema,
-          targetSchema: workflowInput.targetSchema
-        }),
-      adapterId,
-      workflowInput,
-      executionConfig
-    });
-
-    const mappingEngineer = runStep({
-      runId,
-      stepName: 'mapping_engineer',
-      fn: () =>
-        runMappingEngineerAgent({
-          projectId: workflowInput.projectId,
-          partnerId: workflowInput.partnerId,
-          documentType: workflowInput.documentType,
-          mappingIntent: workflowInput.mappingIntent
-        }),
-      adapterId,
-      workflowInput,
-      executionConfig
-    });
-
-    const testCertification = runStep({
-      runId,
-      stepName: 'test_certification',
-      fn: () =>
-        runTestCertificationAgent({
-          projectId: workflowInput.projectId,
-          documentType: workflowInput.documentType,
-          testResults: workflowInput.test.results,
-          certificationCriteria: workflowInput.test.certificationCriteria,
-          defectSummary: workflowInput.test.defectSummary,
-          partnerCertification: workflowInput.test.partnerCertification
-        }),
-      adapterId,
-      workflowInput,
-      executionConfig
-    });
-
-    const deploymentReadiness = runStep({
-      runId,
-      stepName: 'deployment_readiness',
-      fn: () =>
-        runDeploymentReadinessAgent({
-          projectId: workflowInput.projectId,
-          environment: workflowInput.deployment.environment,
-          checklist: workflowInput.deployment.checklist,
-          approvals: workflowInput.deployment.approvals
-        }),
-      adapterId,
-      workflowInput,
-      executionConfig
-    });
-
-    const standardsArchitecture = runStep({
-      runId,
-      stepName: 'standards_architecture',
-      fn: () =>
-        runStandardsArchitectureAgent({
-          projectId: workflowInput.projectId,
-          artifacts: workflowInput.standards.artifacts,
-          standardsChecklist: workflowInput.standards.checklist,
-          architectureDecisions: workflowInput.standards.architectureDecisions,
-          reuseTargets: workflowInput.standards.reuseTargets
-        }),
-      adapterId,
-      workflowInput,
-      executionConfig
-    });
-
-    const postProductionEscalation = workflowInput.postProduction.enabled
-      ? runStep({
-          runId,
-          stepName: 'post_production_escalation',
-          fn: () =>
-            runPostProductionEscalationAgent({
-              incidentId: workflowInput.postProduction.incidentId ?? `${workflowInput.projectId}-post-go-live`,
-              projectId: workflowInput.projectId,
-              severity: workflowInput.postProduction.severity ?? 'P3',
-              symptoms: workflowInput.postProduction.symptoms,
-              affectedPartners: workflowInput.postProduction.affectedPartners,
-              runbookSteps: workflowInput.postProduction.runbookSteps,
-              recentChanges: workflowInput.postProduction.recentChanges,
-              metrics: workflowInput.postProduction.metrics
-            }),
-          adapterId,
-          workflowInput,
-          executionConfig
-        })
-      : null;
-
-    const blockingReasons = [];
-
-    if (testCertification.certificationDecision === 'not_ready') {
-      blockingReasons.push('test_certification_not_ready');
-    }
-    if (deploymentReadiness.releaseDecision === 'hold') {
-      blockingReasons.push('deployment_readiness_hold');
-    }
-    if (standardsArchitecture.approvalRecommendation === 'revise') {
-      blockingReasons.push('standards_review_requires_revision');
-    }
-    if (integrationProgram.escalationNeeded) {
-      blockingReasons.push('integration_program_escalation_required');
-    }
-
-    if (executionConfig.approvalMode === 'execute') {
-      if (!isScopeApproved(executionConfig.approvals, 'workflow_execute')) {
-        blockingReasons.push('workflow_execute_approval_missing');
-      }
-      if (deploymentReadiness.releaseDecision === 'ready' &&
-          !isScopeApproved(executionConfig.approvals, 'deployment_execute')) {
-        blockingReasons.push('deployment_execute_approval_missing');
-      }
-      if (postProductionEscalation &&
-          !isScopeApproved(executionConfig.approvals, 'post_production_escalation_execute')) {
-        blockingReasons.push('post_production_escalation_execute_approval_missing');
-      }
-    }
-
-    const goLiveRecommendation = blockingReasons.length ? 'hold' : 'proceed';
     const result = {
       runId,
       workflow: 'new_partner_implementation',
       projectId: workflowInput.projectId,
       partnerName: workflowInput.partnerName,
-      executedSteps: [
-        'integration_program',
-        'onboarding',
-        'spec_analysis',
-        'mapping_engineer',
-        'test_certification',
-        'deployment_readiness',
-        'standards_architecture',
-        ...(postProductionEscalation ? ['post_production_escalation'] : [])
-      ],
-      summary: {
-        goLiveRecommendation,
-        blockingReasons
-      },
-      outputs: {
-        integrationProgram,
-        onboarding,
-        specAnalysis,
-        mappingEngineer,
-        testCertification,
-        deploymentReadiness,
-        standardsArchitecture,
-        postProductionEscalation
-      }
+      executedSteps: executionResult.executedSteps,
+      summary: executionResult.summary,
+      outputs: executionResult.outputs
     };
 
     completeWorkflowRun(runId, {
-      status: goLiveRecommendation === 'proceed' ? 'completed' : 'hold',
-      goLiveRecommendation,
-      blockingReasons,
+      status: executionResult.summary.goLiveRecommendation === 'proceed' ? 'completed' : 'hold',
+      goLiveRecommendation: executionResult.summary.goLiveRecommendation,
+      blockingReasons: executionResult.summary.blockingReasons,
       output: result
     });
-    createWorkflowEvent(runId, 'workflow.run.completed', {
-      goLiveRecommendation,
-      blockingReasons
-    });
-
+    createWorkflowEvent(runId, 'workflow.run.completed', executionResult.summary);
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -304,9 +335,81 @@ export function runNewPartnerImplementationWorkflow(args) {
       blockingReasons: ['workflow_execution_failed'],
       output: { error: message }
     });
-    createWorkflowEvent(runId, 'workflow.run.failed', {
-      error: message
+    createWorkflowEvent(runId, 'workflow.run.failed', { error: message });
+    throw error;
+  }
+}
+
+function chooseResumeStep(run) {
+  const latestSteps = getLatestStepStates(run.id);
+  for (const stepName of WORKFLOW_STEPS) {
+    if (stepName === 'post_production_escalation' && !run.input?.postProduction?.enabled) continue;
+    const state = latestSteps.get(stepName);
+    if (!state) return stepName;
+    if (state.status !== 'completed') return stepName;
+  }
+  return 'deployment_readiness';
+}
+
+export async function resumeNewPartnerImplementationWorkflow({ runId, override = {} }) {
+  const run = getWorkflowRunById(runId);
+  if (!run) throw new Error(`Workflow run not found: ${runId}`);
+  if (run.workflow !== 'new_partner_implementation') {
+    throw new Error(`Unsupported workflow for resume: ${run.workflow}`);
+  }
+
+  let workflowInput = run.input ?? {};
+  workflowInput = mergeExecutionOverride(workflowInput, override.execution);
+  workflowInput = mergeRetryPolicy(workflowInput, override.retryPolicy);
+  updateWorkflowRunInput(runId, workflowInput);
+  createWorkflowEvent(runId, 'workflow.run.resumed', {
+    override,
+    resumedAt: new Date().toISOString()
+  });
+
+  const fromStep = override.fromStep ?? chooseResumeStep(run);
+  const { execution } = resolveExecutionConfig('new_partner_implementation', workflowInput);
+
+  try {
+    const executionResult = await executeWorkflow({
+      runId,
+      adapterId: run.adapter,
+      workflowInput,
+      fromStep
     });
+
+    const result = {
+      runId,
+      workflow: 'new_partner_implementation',
+      projectId: workflowInput.projectId,
+      partnerName: workflowInput.partnerName,
+      resumedFromStep: fromStep,
+      executedSteps: executionResult.executedSteps,
+      summary: executionResult.summary,
+      outputs: executionResult.outputs
+    };
+
+    completeWorkflowRun(runId, {
+      status: executionResult.summary.goLiveRecommendation === 'proceed' ? 'completed' : 'hold',
+      goLiveRecommendation: executionResult.summary.goLiveRecommendation,
+      blockingReasons: executionResult.summary.blockingReasons,
+      output: result
+    });
+    createWorkflowEvent(runId, 'workflow.run.completed', {
+      ...executionResult.summary,
+      resumedFromStep: fromStep,
+      approvalMode: execution.approvalMode
+    });
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    completeWorkflowRun(runId, {
+      status: 'failed',
+      goLiveRecommendation: null,
+      blockingReasons: ['workflow_resume_failed'],
+      output: { error: message }
+    });
+    createWorkflowEvent(runId, 'workflow.run.failed', { error: message, resumedFromStep: fromStep });
     throw error;
   }
 }

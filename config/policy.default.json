@@ -1,0 +1,44 @@
+{
+  "executionDefaults": {
+    "approvalMode": "propose_only",
+    "executeTools": false
+  },
+  "approvalRules": {
+    "new_partner_implementation": {
+      "executeScopes": [
+        "workflow_execute",
+        "deployment_execute"
+      ],
+      "postProductionScope": "post_production_escalation_execute"
+    }
+  },
+  "toolExecution": {
+    "backends": {
+      "project.plan.sync": {
+        "type": "http_json",
+        "urlEnv": "TOOL_PROJECT_PLAN_SYNC_URL",
+        "authTokenEnv": "TOOL_PROJECT_PLAN_SYNC_TOKEN"
+      },
+      "test.execution.run": {
+        "type": "http_json",
+        "urlEnv": "TOOL_TEST_EXECUTION_RUN_URL",
+        "authTokenEnv": "TOOL_TEST_EXECUTION_RUN_TOKEN"
+      },
+      "certification.report.publish": {
+        "type": "http_json",
+        "urlEnv": "TOOL_CERT_REPORT_PUBLISH_URL",
+        "authTokenEnv": "TOOL_CERT_REPORT_PUBLISH_TOKEN"
+      },
+      "stakeholder.status.publish": {
+        "type": "http_json",
+        "urlEnv": "TOOL_STAKEHOLDER_STATUS_PUBLISH_URL",
+        "authTokenEnv": "TOOL_STAKEHOLDER_STATUS_PUBLISH_TOKEN"
+      }
+    }
+  },
+  "retryPolicy": {
+    "maxAttempts": 3,
+    "backoffMs": 250
+  }
+}
+

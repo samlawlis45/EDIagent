@@ -1,12 +1,12 @@
 {
   "name": "@ediagent/agent-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": false,
   "type": "module",
   "description": "Standalone API service for portable EDI agent execution",
   "scripts": {
     "start": "node src/server.js",
-    "check": "node --check src/server.js && node --check src/engine.js && node --check src/schemas.js && node --check src/adapters/*.js && node --check src/agents/*.js && node --check src/workflows/*.js"
+    "check": "node --check src/server.js && node --check src/engine.js && node --check src/schemas.js && node --check src/adapters/*.js && node --check src/agents/*.js && node --check src/workflows/*.js && node --check src/persistence/*.js && node --check src/policy/*.js && node --check src/tools/*.js && node --check src/tools/backends/*.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.6.2",
