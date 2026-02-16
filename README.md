@@ -234,6 +234,11 @@ Default policy maps:
 - `cleo.mapping.apply` -> Cleo mapping apply operation
 - `test.suite.execute` -> Cleo test suite operation
 
+Staging rollout assets:
+
+- `docs/CLEO_STAGING_CHECKLIST.md`
+- `scripts/cleo-staging-smoke.sh`
+
 ### Event Streaming and Webhooks
 
 SSE stream:
