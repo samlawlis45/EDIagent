@@ -24,11 +24,15 @@ This lets teams deploy the same agents in their own environment without forcing 
 
 ## Included Agents
 
+- `integration_program`
 - `onboarding`
 - `invoice_anomaly`
 - `spec_analysis`
 - `mapping_engineer`
+- `test_certification`
 - `deployment_readiness`
+- `post_production_escalation`
+- `standards_architecture`
 
 ## Included Adapters
 
