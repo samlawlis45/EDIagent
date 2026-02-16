@@ -18,6 +18,7 @@ import {
 } from '../persistence/workflow-store.js';
 import { resolveExecutionConfig } from '../policy/engine.js';
 import { executeToolContracts } from '../tools/registry.js';
+import { publishEvent } from '../events/bus.js';
 
 const WORKFLOW_STEPS = [
   'integration_program',
@@ -139,7 +140,7 @@ async function sleep(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function runStep({ runId, stepName, adapterId, workflowInput, executionConfig, retryPolicy }) {
+async function runStep({ tenantId, runId, stepName, adapterId, workflowInput, executionConfig, retryPolicy }) {
   const maxAttempts = retryPolicy.maxAttempts ?? 3;
   const backoffMs = retryPolicy.backoffMs ?? 250;
   let attempt = 0;
@@ -147,8 +148,10 @@ async function runStep({ runId, stepName, adapterId, workflowInput, executionCon
 
   while (attempt < maxAttempts) {
     attempt += 1;
-    const step = createWorkflowStep(runId, stepName);
-    createWorkflowEvent(runId, 'workflow.step.started', { stepName, stepId: step.id, attempt: step.attempt });
+    const step = createWorkflowStep(tenantId, runId, stepName);
+    const startedPayload = { stepName, stepId: step.id, attempt: step.attempt };
+    createWorkflowEvent(tenantId, runId, 'workflow.step.started', startedPayload);
+    publishEvent(tenantId, 'workflow.step.started', { runId, ...startedPayload });
 
     try {
       const raw = STEP_RUNNERS[stepName](workflowInput);
@@ -167,7 +170,9 @@ async function runStep({ runId, stepName, adapterId, workflowInput, executionCon
           latestStepOutput: raw
         },
         executeTools: executionConfig.approvalMode === 'execute' && executionConfig.executeTools,
-        enabledTools: executionConfig.enabledTools
+        enabledTools: executionConfig.enabledTools,
+        tenantId,
+        workflowRunId: runId,
       });
 
       const finalOutput = {
@@ -176,25 +181,29 @@ async function runStep({ runId, stepName, adapterId, workflowInput, executionCon
       };
 
       completeWorkflowStep(step.id, 'completed', finalOutput);
-      createWorkflowEvent(runId, 'workflow.step.completed', {
+      const completedPayload = {
         stepName,
         stepId: step.id,
         attempt: step.attempt,
         toolExecution: toolResults
-      });
+      };
+      createWorkflowEvent(tenantId, runId, 'workflow.step.completed', completedPayload);
+      publishEvent(tenantId, 'workflow.step.completed', { runId, ...completedPayload });
       return finalOutput;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       lastError = message;
       const status = attempt >= maxAttempts ? 'failed' : 'retrying';
       completeWorkflowStep(step.id, status, null, message);
-      createWorkflowEvent(runId, 'workflow.step.failed', {
+      const failedPayload = {
         stepName,
         stepId: step.id,
         attempt: step.attempt,
         status,
         error: message
-      });
+      };
+      createWorkflowEvent(tenantId, runId, 'workflow.step.failed', failedPayload);
+      publishEvent(tenantId, 'workflow.step.failed', { runId, ...failedPayload });
       if (attempt < maxAttempts) {
         await sleep(backoffMs * attempt);
       }
@@ -250,7 +259,7 @@ function buildSummary(outputs, executionConfig, workflowRules) {
   };
 }
 
-async function executeWorkflow({ runId, adapterId, workflowInput, fromStep }) {
+async function executeWorkflow({ tenantId, runId, adapterId, workflowInput, fromStep }) {
   const { execution: executionConfig, workflowRules, retryPolicy } = resolveExecutionConfig(
     'new_partner_implementation',
     workflowInput
@@ -260,6 +269,7 @@ async function executeWorkflow({ runId, adapterId, workflowInput, fromStep }) {
 
   for (const stepName of stepsToRun) {
     const result = await runStep({
+      tenantId,
       runId,
       stepName,
       adapterId,
@@ -286,8 +296,10 @@ async function executeWorkflow({ runId, adapterId, workflowInput, fromStep }) {
 }
 
 export async function runNewPartnerImplementationWorkflow({ adapterId, workflowInput }) {
+  const tenantId = workflowInput.tenantId ?? 'default';
   const { execution } = resolveExecutionConfig('new_partner_implementation', workflowInput);
   const run = createWorkflowRun({
+    tenantId,
     workflow: 'new_partner_implementation',
     adapter: adapterId,
     projectId: workflowInput.projectId,
@@ -296,14 +308,17 @@ export async function runNewPartnerImplementationWorkflow({ adapterId, workflowI
     input: workflowInput
   });
   const runId = run.id;
-  createWorkflowEvent(runId, 'workflow.run.started', {
+  const startedPayload = {
     workflow: 'new_partner_implementation',
     projectId: workflowInput.projectId,
     approvalMode: execution.approvalMode
-  });
+  };
+  createWorkflowEvent(tenantId, runId, 'workflow.run.started', startedPayload);
+  publishEvent(tenantId, 'workflow.run.started', { runId, ...startedPayload });
 
   try {
     const executionResult = await executeWorkflow({
+      tenantId,
       runId,
       adapterId,
       workflowInput
@@ -325,7 +340,8 @@ export async function runNewPartnerImplementationWorkflow({ adapterId, workflowI
       blockingReasons: executionResult.summary.blockingReasons,
       output: result
     });
-    createWorkflowEvent(runId, 'workflow.run.completed', executionResult.summary);
+    createWorkflowEvent(tenantId, runId, 'workflow.run.completed', executionResult.summary);
+    publishEvent(tenantId, 'workflow.run.completed', { runId, ...executionResult.summary });
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -335,13 +351,14 @@ export async function runNewPartnerImplementationWorkflow({ adapterId, workflowI
       blockingReasons: ['workflow_execution_failed'],
       output: { error: message }
     });
-    createWorkflowEvent(runId, 'workflow.run.failed', { error: message });
+    createWorkflowEvent(tenantId, runId, 'workflow.run.failed', { error: message });
+    publishEvent(tenantId, 'workflow.run.failed', { runId, error: message });
     throw error;
   }
 }
 
-function chooseResumeStep(run) {
-  const latestSteps = getLatestStepStates(run.id);
+function chooseResumeStep(tenantId, run) {
+  const latestSteps = getLatestStepStates(tenantId, run.id);
   for (const stepName of WORKFLOW_STEPS) {
     if (stepName === 'post_production_escalation' && !run.input?.postProduction?.enabled) continue;
     const state = latestSteps.get(stepName);
@@ -352,7 +369,8 @@ function chooseResumeStep(run) {
 }
 
 export async function resumeNewPartnerImplementationWorkflow({ runId, override = {} }) {
-  const run = getWorkflowRunById(runId);
+  const tenantId = override.tenantId ?? 'default';
+  const run = getWorkflowRunById(tenantId, runId);
   if (!run) throw new Error(`Workflow run not found: ${runId}`);
   if (run.workflow !== 'new_partner_implementation') {
     throw new Error(`Unsupported workflow for resume: ${run.workflow}`);
@@ -361,17 +379,21 @@ export async function resumeNewPartnerImplementationWorkflow({ runId, override =
   let workflowInput = run.input ?? {};
   workflowInput = mergeExecutionOverride(workflowInput, override.execution);
   workflowInput = mergeRetryPolicy(workflowInput, override.retryPolicy);
-  updateWorkflowRunInput(runId, workflowInput);
-  createWorkflowEvent(runId, 'workflow.run.resumed', {
+  workflowInput.tenantId = tenantId;
+  updateWorkflowRunInput(tenantId, runId, workflowInput);
+  const resumedPayload = {
     override,
     resumedAt: new Date().toISOString()
-  });
+  };
+  createWorkflowEvent(tenantId, runId, 'workflow.run.resumed', resumedPayload);
+  publishEvent(tenantId, 'workflow.run.resumed', { runId, ...resumedPayload });
 
-  const fromStep = override.fromStep ?? chooseResumeStep(run);
+  const fromStep = override.fromStep ?? chooseResumeStep(tenantId, run);
   const { execution } = resolveExecutionConfig('new_partner_implementation', workflowInput);
 
   try {
     const executionResult = await executeWorkflow({
+      tenantId,
       runId,
       adapterId: run.adapter,
       workflowInput,
@@ -395,11 +417,13 @@ export async function resumeNewPartnerImplementationWorkflow({ runId, override =
       blockingReasons: executionResult.summary.blockingReasons,
       output: result
     });
-    createWorkflowEvent(runId, 'workflow.run.completed', {
+    const completedPayload = {
       ...executionResult.summary,
       resumedFromStep: fromStep,
       approvalMode: execution.approvalMode
-    });
+    };
+    createWorkflowEvent(tenantId, runId, 'workflow.run.completed', completedPayload);
+    publishEvent(tenantId, 'workflow.run.completed', { runId, ...completedPayload });
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -409,8 +433,9 @@ export async function resumeNewPartnerImplementationWorkflow({ runId, override =
       blockingReasons: ['workflow_resume_failed'],
       output: { error: message }
     });
-    createWorkflowEvent(runId, 'workflow.run.failed', { error: message, resumedFromStep: fromStep });
+    const failedPayload = { error: message, resumedFromStep: fromStep };
+    createWorkflowEvent(tenantId, runId, 'workflow.run.failed', failedPayload);
+    publishEvent(tenantId, 'workflow.run.failed', { runId, ...failedPayload });
     throw error;
   }
 }
-

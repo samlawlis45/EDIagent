@@ -1,6 +1,8 @@
 import { getToolAdapter } from './adapter-registry.js';
-import { getToolBackendConfig } from '../policy/engine.js';
+import { getToolBackendConfig, getToolReliabilityConfig } from '../policy/engine.js';
 import { callHttpJsonBackend } from './backends/http-json-backend.js';
+import { callCleoCicBackend } from './backends/cleo-cic-backend.js';
+import { createToolDeadLetter } from '../persistence/workflow-store.js';
 
 function pickFields(source, requiredInputs = []) {
   const payload = {};
@@ -59,7 +61,33 @@ const toolHandlers = {
   })
 };
 
-async function executeToolWithBackend(toolName, transformedPayload) {
+const circuitState = new Map();
+
+function isCircuitOpen(toolName, reliability) {
+  const state = circuitState.get(toolName);
+  if (!state) return false;
+  if (state.failures < (reliability.circuitBreakerFailures ?? 5)) return false;
+  const cooldown = reliability.circuitBreakerCooldownMs ?? 30000;
+  return (Date.now() - state.lastFailureAt) < cooldown;
+}
+
+function markFailure(toolName) {
+  const state = circuitState.get(toolName) ?? { failures: 0, lastFailureAt: 0 };
+  state.failures += 1;
+  state.lastFailureAt = Date.now();
+  circuitState.set(toolName, state);
+}
+
+function markSuccess(toolName) {
+  circuitState.set(toolName, { failures: 0, lastFailureAt: 0 });
+}
+
+async function sleep(ms) {
+  if (!ms) return;
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function executeToolWithBackend(toolName, transformedPayload, reliability) {
   const backendConfig = getToolBackendConfig(toolName);
   if (!backendConfig) {
     return {
@@ -68,13 +96,47 @@ async function executeToolWithBackend(toolName, transformedPayload) {
     };
   }
 
-  if (backendConfig.type === 'http_json') {
-    return callHttpJsonBackend(backendConfig, transformedPayload);
+  if (isCircuitOpen(toolName, reliability)) {
+    return {
+      status: 'failed',
+      reason: 'Circuit breaker open'
+    };
+  }
+
+  const attempts = reliability.maxAttempts ?? 2;
+  const backoff = reliability.backoffMs ?? 200;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    let result;
+
+    if (backendConfig.type === 'http_json') {
+      result = await callHttpJsonBackend(backendConfig, transformedPayload, reliability);
+    } else if (backendConfig.type === 'cleo_cic') {
+      result = await callCleoCicBackend(backendConfig, transformedPayload, reliability);
+    } else {
+      result = {
+        status: 'unsupported',
+        reason: `Unsupported backend type: ${backendConfig.type}`
+      };
+    }
+
+    if (result.status === 'executed' || result.status === 'skipped') {
+      markSuccess(toolName);
+      return {
+        ...result,
+        attempt
+      };
+    }
+
+    markFailure(toolName);
+    if (attempt < attempts) {
+      await sleep(backoff * attempt);
+    }
   }
 
   return {
-    status: 'unsupported',
-    reason: `Unsupported backend type: ${backendConfig.type}`
+    status: 'failed',
+    reason: `Backend failed after ${attempts} attempts`
   };
 }
 
@@ -84,9 +146,12 @@ export async function executeToolContracts(args) {
     contracts = [],
     context,
     executeTools = false,
-    enabledTools = []
+    enabledTools = [],
+    tenantId = 'default',
+    workflowRunId = null
   } = args;
   const adapter = getToolAdapter(adapterId);
+  const reliability = getToolReliabilityConfig();
   const allowAll = enabledTools.includes('*');
   const results = [];
 
@@ -123,7 +188,16 @@ export async function executeToolContracts(args) {
 
     const output = handler({ context, contract });
     const transformed = adapter.transform(contract.tool, output);
-    const backendResult = await executeToolWithBackend(contract.tool, transformed);
+    const backendResult = await executeToolWithBackend(contract.tool, transformed, reliability);
+    if (backendResult.status === 'failed') {
+      createToolDeadLetter({
+        tenantId,
+        workflowRunId,
+        toolName: contract.tool,
+        payload: transformed,
+        error: backendResult.reason ?? 'backend failure'
+      });
+    }
     results.push({
       tool: contract.tool,
       status: backendResult.status,

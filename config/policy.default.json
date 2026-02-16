@@ -13,6 +13,13 @@
     }
   },
   "toolExecution": {
+    "reliability": {
+      "timeoutMs": 5000,
+      "maxAttempts": 2,
+      "backoffMs": 200,
+      "circuitBreakerFailures": 5,
+      "circuitBreakerCooldownMs": 30000
+    },
     "backends": {
       "project.plan.sync": {
         "type": "http_json",
@@ -33,6 +40,14 @@
         "type": "http_json",
         "urlEnv": "TOOL_STAKEHOLDER_STATUS_PUBLISH_URL",
         "authTokenEnv": "TOOL_STAKEHOLDER_STATUS_PUBLISH_TOKEN"
+      },
+      "cleo.mapping.apply": {
+        "type": "cleo_cic",
+        "operation": "apply_mapping"
+      },
+      "test.suite.execute": {
+        "type": "cleo_cic",
+        "operation": "execute_test_suite"
       }
     }
   },
@@ -41,4 +56,3 @@
     "backoffMs": 250
   }
 }
-

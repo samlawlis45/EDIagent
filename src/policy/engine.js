@@ -50,3 +50,13 @@ export function getToolBackendConfig(toolName) {
   return policy.toolExecution?.backends?.[toolName] ?? null;
 }
 
+export function getToolReliabilityConfig() {
+  const policy = readPolicy();
+  return policy.toolExecution?.reliability ?? {
+    timeoutMs: 5000,
+    maxAttempts: 2,
+    backoffMs: 200,
+    circuitBreakerFailures: 5,
+    circuitBreakerCooldownMs: 30000
+  };
+}

@@ -14,6 +14,7 @@ db.pragma('journal_mode = WAL');
 db.exec(`
 CREATE TABLE IF NOT EXISTS workflow_runs (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
   workflow TEXT NOT NULL,
   adapter TEXT NOT NULL,
   project_id TEXT,
@@ -30,6 +31,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
 
 CREATE TABLE IF NOT EXISTS workflow_steps (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
   workflow_run_id TEXT NOT NULL,
   step_name TEXT NOT NULL,
   attempt INTEGER NOT NULL DEFAULT 1,
@@ -43,6 +45,7 @@ CREATE TABLE IF NOT EXISTS workflow_steps (
 
 CREATE TABLE IF NOT EXISTS workflow_events (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
   workflow_run_id TEXT NOT NULL,
   event_type TEXT NOT NULL,
   event_data_json TEXT NOT NULL,
@@ -53,6 +56,49 @@ CREATE TABLE IF NOT EXISTS workflow_events (
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_created_at ON workflow_runs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_workflow_steps_run_id ON workflow_steps(workflow_run_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_events_run_id ON workflow_events(workflow_run_id);
+
+CREATE TABLE IF NOT EXISTS tenants (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tenant_api_keys (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  key_hash TEXT NOT NULL,
+  key_prefix TEXT NOT NULL,
+  scopes_json TEXT NOT NULL DEFAULT '[]',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tenant_api_keys_prefix ON tenant_api_keys(key_prefix);
+
+CREATE TABLE IF NOT EXISTS webhook_subscriptions (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  secret TEXT,
+  events_json TEXT NOT NULL DEFAULT '[]',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_webhooks_tenant ON webhook_subscriptions(tenant_id, active);
+
+CREATE TABLE IF NOT EXISTS tool_dead_letters (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  workflow_run_id TEXT,
+  tool_name TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  error TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 `);
 
 function ensureColumn(tableName, columnName, ddl) {
@@ -63,6 +109,10 @@ function ensureColumn(tableName, columnName, ddl) {
 }
 
 ensureColumn('workflow_steps', 'attempt', 'attempt INTEGER NOT NULL DEFAULT 1');
+ensureColumn('workflow_runs', 'tenant_id', "tenant_id TEXT NOT NULL DEFAULT 'default'");
+ensureColumn('workflow_steps', 'tenant_id', "tenant_id TEXT NOT NULL DEFAULT 'default'");
+ensureColumn('workflow_events', 'tenant_id', "tenant_id TEXT NOT NULL DEFAULT 'default'");
+db.exec(`CREATE INDEX IF NOT EXISTS idx_workflow_runs_tenant ON workflow_runs(tenant_id, created_at DESC)`);
 
 export function getDb() {
   return db;

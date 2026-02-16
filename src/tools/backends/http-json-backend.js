@@ -1,4 +1,6 @@
-export async function callHttpJsonBackend(config, payload) {
+import { createHmac } from 'node:crypto';
+
+export async function callHttpJsonBackend(config, payload, reliability) {
   const url = config?.urlEnv ? process.env[config.urlEnv] : null;
   if (!url) {
     return {
@@ -13,12 +15,23 @@ export async function callHttpJsonBackend(config, payload) {
   if (config.authTokenEnv && process.env[config.authTokenEnv]) {
     headers.Authorization = `Bearer ${process.env[config.authTokenEnv]}`;
   }
+  if (config.signatureSecretEnv && process.env[config.signatureSecretEnv]) {
+    headers['X-AgentCore-Signature'] = createHmac('sha256', process.env[config.signatureSecretEnv])
+      .update(JSON.stringify(payload))
+      .digest('hex');
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = reliability?.timeoutMs ?? 5000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   const response = await fetch(url, {
     method: 'POST',
     headers,
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal: controller.signal
   });
+  clearTimeout(timeout);
   let body = null;
   try {
     body = await response.json();
@@ -39,4 +52,3 @@ export async function callHttpJsonBackend(config, payload) {
     response: body
   };
 }
-

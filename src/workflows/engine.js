@@ -17,32 +17,36 @@ export function getWorkflowCapabilities() {
   };
 }
 
-export async function runWorkflow(request) {
+export async function runWorkflow(request, authContext = { tenantId: 'default' }) {
   if (request.workflow === 'new_partner_implementation') {
+    const workflowInput = {
+      ...request.input,
+      tenantId: authContext.tenantId
+    };
     return runNewPartnerImplementationWorkflow({
       adapterId: request.adapter,
-      workflowInput: request.input
+      workflowInput
     });
   }
 
   throw new Error(`Unsupported workflow: ${request.workflow}`);
 }
 
-export function getWorkflowRun(runId) {
-  return getWorkflowRunById(runId);
+export function getWorkflowRun(tenantId, runId) {
+  return getWorkflowRunById(tenantId, runId);
 }
 
-export function getWorkflowRuns(filters = {}) {
-  return listWorkflowRuns(filters);
+export function getWorkflowRuns(tenantId, filters = {}) {
+  return listWorkflowRuns({ ...filters, tenantId });
 }
 
-export async function resumeWorkflowRun(runId, override = {}) {
-  const run = getWorkflowRunById(runId);
+export async function resumeWorkflowRun(tenantId, runId, override = {}) {
+  const run = getWorkflowRunById(tenantId, runId);
   if (!run) {
     throw new Error(`Workflow run not found: ${runId}`);
   }
   if (run.workflow === 'new_partner_implementation') {
-    return resumeNewPartnerImplementationWorkflow({ runId, override });
+    return resumeNewPartnerImplementationWorkflow({ runId, override: { ...override, tenantId } });
   }
   throw new Error(`Resume unsupported for workflow: ${run.workflow}`);
 }

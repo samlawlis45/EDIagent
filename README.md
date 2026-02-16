@@ -19,6 +19,8 @@ This lets teams deploy the same agents in their own environment without forcing 
 ## API
 
 - `GET /health`
+- `GET /v1/agent-core/auth/me`
+- `POST /v1/agent-core/auth/keys`
 - `GET /v1/agent-core/capabilities`
 - `POST /v1/agent-core/run`
 - `GET /v1/agent-core/workflows/capabilities`
@@ -26,6 +28,10 @@ This lets teams deploy the same agents in their own environment without forcing 
 - `GET /v1/agent-core/workflows/runs`
 - `GET /v1/agent-core/workflows/runs/{runId}`
 - `POST /v1/agent-core/workflows/runs/{runId}/resume`
+- `GET /v1/agent-core/webhooks`
+- `POST /v1/agent-core/webhooks`
+- `POST /v1/agent-core/webhooks/{id}/test`
+- `GET /v1/agent-core/events/stream`
 
 ## Included Agents
 
@@ -52,6 +58,24 @@ npm start
 ```
 
 Default port is `4001` (override with `PORT`).
+
+### Auth and Tenant Setup
+
+By default auth is enabled. Provide:
+
+- `x-tenant-id`
+- `Authorization: Bearer <api-key>` (or `x-api-key`)
+
+Bootstrap the first key with env vars:
+
+- `AGENT_CORE_BOOTSTRAP_API_KEY`
+- `AGENT_CORE_BOOTSTRAP_TENANT_ID` (default: `default`)
+- `AGENT_CORE_BOOTSTRAP_TENANT_NAME` (optional)
+- `AGENT_CORE_BOOTSTRAP_KEY_NAME` (optional)
+
+Disable auth for local development only:
+
+- `AGENT_CORE_REQUIRE_AUTH=false`
 
 ## Docker
 
@@ -172,7 +196,10 @@ Workflow execution supports:
 When required approvals are missing in `execute` mode, workflow summary includes blocking reasons and returns a hold recommendation.
 
 Tool execution uses policy-backed backend config in `config/policy.default.json`.
-Supported backend today: `http_json` (POST to endpoint from env var).
+Supported backends:
+
+- `http_json` (POST to endpoint from env var)
+- `cleo_cic` (Cleo Integration Cloud connector)
 
 Example env vars:
 
@@ -180,6 +207,38 @@ Example env vars:
 - `TOOL_TEST_EXECUTION_RUN_URL`
 - `TOOL_CERT_REPORT_PUBLISH_URL`
 - `TOOL_STAKEHOLDER_STATUS_PUBLISH_URL`
+
+Reliability controls are policy-driven:
+
+- timeout
+- retry attempts/backoff
+- circuit breaker failure threshold/cooldown
+- dead-letter persistence in `tool_dead_letters`
+
+### Cleo CIC Connector
+
+Set:
+
+- `CLEO_CIC_BASE_URL`
+- `CLEO_CIC_TOKEN`
+- `CLEO_CIC_TENANT` (optional)
+
+Default policy maps:
+
+- `cleo.mapping.apply` -> Cleo mapping apply operation
+- `test.suite.execute` -> Cleo test suite operation
+
+### Event Streaming and Webhooks
+
+SSE stream:
+
+- `GET /v1/agent-core/events/stream`
+
+Webhook subscriptions:
+
+- `GET /v1/agent-core/webhooks`
+- `POST /v1/agent-core/webhooks`
+- `POST /v1/agent-core/webhooks/{id}/test`
 
 
 
