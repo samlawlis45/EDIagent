@@ -152,7 +152,17 @@ export const runWorkflowSchema = z.object({
         threshold: z.number(),
         direction: z.enum(['above_is_bad', 'below_is_bad'])
       })).default([])
-    }).default({ enabled: false })
+    }).default({ enabled: false }),
+    execution: z.object({
+      approvalMode: z.enum(['propose_only', 'execute']).default('propose_only'),
+      executeTools: z.boolean().default(false),
+      enabledTools: z.array(z.string()).default([]),
+      approvals: z.array(z.object({
+        scope: z.enum(['workflow_execute', 'deployment_execute', 'post_production_escalation_execute']),
+        group: z.string().min(1),
+        required: z.boolean().optional(),
+        status: z.enum(['approved', 'pending', 'rejected'])
+      })).default([])
+    }).default({})
   })
 });
-

@@ -23,6 +23,8 @@ This lets teams deploy the same agents in their own environment without forcing 
 - `POST /v1/agent-core/run`
 - `GET /v1/agent-core/workflows/capabilities`
 - `POST /v1/agent-core/workflows/run`
+- `GET /v1/agent-core/workflows/runs`
+- `GET /v1/agent-core/workflows/runs/{runId}`
 
 ## Included Agents
 
@@ -105,10 +107,45 @@ curl -X POST http://localhost:4001/v1/agent-core/workflows/run \
       "partnerId": "partner-22",
       "connectionType": "SFTP",
       "sourceSchema": {"fields":[{"name":"invoice_total","type":"number"}]},
-      "targetSchema": {"fields":[{"name":"invoice_total","type":"number","required":true}]}
+      "targetSchema": {"fields":[{"name":"invoice_total","type":"number","required":true}]},
+      "execution": {
+        "approvalMode": "execute",
+        "executeTools": true,
+        "enabledTools": ["project.plan.sync", "test.execution.run", "certification.report.publish", "stakeholder.status.publish"],
+        "approvals": [
+          {"scope":"workflow_execute","group":"CAB","status":"approved","required":true},
+          {"scope":"deployment_execute","group":"Release","status":"approved","required":true}
+        ]
+      }
     }
   }'
 ```
+
+## Workflow Persistence
+
+Workflow runs, steps, and events are persisted in SQLite:
+
+- Default path: `services/agent-core/data/agent-core.db`
+- Override path with `AGENT_CORE_DB_PATH`
+
+Use:
+
+- `GET /v1/agent-core/workflows/runs?limit=50`
+- `GET /v1/agent-core/workflows/runs/{runId}`
+
+## Approval Gates and Tool Execution
+
+Workflow execution supports:
+
+- `approvalMode`: `propose_only` or `execute`
+- `approvals` scoped to:
+  - `workflow_execute`
+  - `deployment_execute`
+  - `post_production_escalation_execute`
+- `executeTools` and `enabledTools` for controlled tool execution
+
+When required approvals are missing in `execute` mode, workflow summary includes blocking reasons and returns a hold recommendation.
+
 
 ## Extending
 

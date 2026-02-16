@@ -3,8 +3,9 @@ import { URL } from 'node:url';
 import { ZodError } from 'zod';
 import { getAgentCoreCapabilities, runAgent } from './engine.js';
 import { runAgentSchema } from './schemas.js';
-import { getWorkflowCapabilities, runWorkflow } from './workflows/engine.js';
+import { getWorkflowCapabilities, getWorkflowRun, getWorkflowRuns, runWorkflow } from './workflows/engine.js';
 import { runWorkflowSchema } from './workflows/schemas.js';
+import { getDbPath } from './persistence/db.js';
 
 const port = Number(process.env.PORT ?? 4001);
 const maxBodyBytes = Number(process.env.MAX_BODY_BYTES ?? 1_000_000);
@@ -65,7 +66,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === 'GET' && path === '/health') {
-    json(res, 200, { ok: true, service: 'agent-core', timestamp: new Date().toISOString() });
+    json(res, 200, { ok: true, service: 'agent-core', dbPath: getDbPath(), timestamp: new Date().toISOString() });
     return;
   }
 
@@ -123,6 +124,23 @@ const server = http.createServer(async (req, res) => {
       json(res, 500, { error: message });
       return;
     }
+  }
+
+  if (method === 'GET' && path === '/v1/agent-core/workflows/runs') {
+    const limit = Number(parsedUrl.searchParams.get('limit') ?? '50');
+    json(res, 200, { runs: getWorkflowRuns(limit) });
+    return;
+  }
+
+  if (method === 'GET' && path.startsWith('/v1/agent-core/workflows/runs/')) {
+    const runId = path.replace('/v1/agent-core/workflows/runs/', '');
+    const run = getWorkflowRun(runId);
+    if (!run) {
+      json(res, 404, { error: `Workflow run not found: ${runId}` });
+      return;
+    }
+    json(res, 200, run);
+    return;
   }
 
   json(res, 404, { error: 'Not found' });
