@@ -1,0 +1,15 @@
+{
+  "name": "@ediagent/agent-core",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Standalone API service for portable EDI agent execution",
+  "scripts": {
+    "start": "node src/server.js",
+    "check": "node --check src/server.js && node --check src/engine.js && node --check src/schemas.js && node --check src/adapters/*.js && node --check src/agents/*.js"
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "license": "Apache-2.0"
+}
