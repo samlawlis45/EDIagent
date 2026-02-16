@@ -2,6 +2,11 @@
 
 Open-source, self-hosted runtime for EDI-focused agents that can run across different EDI products using adapters.
 
+[![Release](https://img.shields.io/github/v/release/samlawlis45/EDIagent)](https://github.com/samlawlis45/EDIagent/releases)
+[![License](https://img.shields.io/github/license/samlawlis45/EDIagent)](https://github.com/samlawlis45/EDIagent/blob/main/LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/samlawlis45/EDIagent/ci.yml?branch=main)](https://github.com/samlawlis45/EDIagent/actions/workflows/ci.yml)
+[![Issues](https://img.shields.io/github/issues/samlawlis45/EDIagent)](https://github.com/samlawlis45/EDIagent/issues)
+
 ## Why
 
 `agent-core` separates:
