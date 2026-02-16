@@ -21,6 +21,8 @@ This lets teams deploy the same agents in their own environment without forcing 
 - `GET /health`
 - `GET /v1/agent-core/capabilities`
 - `POST /v1/agent-core/run`
+- `GET /v1/agent-core/workflows/capabilities`
+- `POST /v1/agent-core/workflows/run`
 
 ## Included Agents
 
@@ -84,6 +86,26 @@ curl -X POST http://localhost:4001/v1/agent-core/run \
       "approvals": [
         {"group":"Change Advisory Board","status":"pending","required":true}
       ]
+    }
+  }'
+```
+
+## Example Workflow Request
+
+```bash
+curl -X POST http://localhost:4001/v1/agent-core/workflows/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "adapter": "canonical",
+    "workflow": "new_partner_implementation",
+    "input": {
+      "projectId": "proj-100",
+      "projectName": "Acme Implementation",
+      "partnerName": "Acme Logistics",
+      "partnerId": "partner-22",
+      "connectionType": "SFTP",
+      "sourceSchema": {"fields":[{"name":"invoice_total","type":"number"}]},
+      "targetSchema": {"fields":[{"name":"invoice_total","type":"number","required":true}]}
     }
   }'
 ```
