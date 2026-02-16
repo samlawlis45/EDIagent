@@ -157,7 +157,7 @@ async function runStep({ tenantId, runId, stepName, adapterId, workflowInput, ex
       const raw = STEP_RUNNERS[stepName](workflowInput);
       if (raw === null) {
         completeWorkflowStep(step.id, 'completed', null);
-        createWorkflowEvent(runId, 'workflow.step.skipped', { stepName, reason: 'not_enabled' });
+        createWorkflowEvent(tenantId, runId, 'workflow.step.skipped', { stepName, reason: 'not_enabled' });
         return null;
       }
 

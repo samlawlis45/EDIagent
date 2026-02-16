@@ -87,8 +87,8 @@ async function sleep(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function executeToolWithBackend(toolName, transformedPayload, reliability) {
-  const backendConfig = getToolBackendConfig(toolName);
+async function executeToolWithBackend(tenantId, toolName, transformedPayload, reliability) {
+  const backendConfig = getToolBackendConfig(tenantId, toolName);
   if (!backendConfig) {
     return {
       status: 'unsupported',
@@ -108,15 +108,22 @@ async function executeToolWithBackend(toolName, transformedPayload, reliability)
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     let result;
-
-    if (backendConfig.type === 'http_json') {
-      result = await callHttpJsonBackend(backendConfig, transformedPayload, reliability);
-    } else if (backendConfig.type === 'cleo_cic') {
-      result = await callCleoCicBackend(backendConfig, transformedPayload, reliability);
-    } else {
+    try {
+      if (backendConfig.type === 'http_json') {
+        result = await callHttpJsonBackend(backendConfig, transformedPayload, reliability);
+      } else if (backendConfig.type === 'cleo_cic') {
+        result = await callCleoCicBackend(backendConfig, transformedPayload, reliability);
+      } else {
+        result = {
+          status: 'unsupported',
+          reason: `Unsupported backend type: ${backendConfig.type}`
+        };
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
       result = {
-        status: 'unsupported',
-        reason: `Unsupported backend type: ${backendConfig.type}`
+        status: 'failed',
+        reason
       };
     }
 
@@ -151,7 +158,7 @@ export async function executeToolContracts(args) {
     workflowRunId = null
   } = args;
   const adapter = getToolAdapter(adapterId);
-  const reliability = getToolReliabilityConfig();
+  const reliability = getToolReliabilityConfig(tenantId);
   const allowAll = enabledTools.includes('*');
   const results = [];
 
@@ -188,7 +195,7 @@ export async function executeToolContracts(args) {
 
     const output = handler({ context, contract });
     const transformed = adapter.transform(contract.tool, output);
-    const backendResult = await executeToolWithBackend(contract.tool, transformed, reliability);
+    const backendResult = await executeToolWithBackend(tenantId, contract.tool, transformed, reliability);
     if (backendResult.status === 'failed') {
       createToolDeadLetter({
         tenantId,

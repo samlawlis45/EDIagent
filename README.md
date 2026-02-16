@@ -30,8 +30,14 @@ This lets teams deploy the same agents in their own environment without forcing 
 - `POST /v1/agent-core/workflows/runs/{runId}/resume`
 - `GET /v1/agent-core/webhooks`
 - `POST /v1/agent-core/webhooks`
+- `GET /v1/agent-core/webhooks/deliveries`
+- `GET /v1/agent-core/webhooks/deliveries/{id}`
+- `POST /v1/agent-core/webhooks/deliveries/{id}/retry`
 - `POST /v1/agent-core/webhooks/{id}/test`
 - `GET /v1/agent-core/events/stream`
+- `GET /v1/agent-core/policies`
+- `PUT /v1/agent-core/policies`
+- `GET /v1/agent-core/metrics`
 
 ## Included Agents
 
@@ -238,7 +244,32 @@ Webhook subscriptions:
 
 - `GET /v1/agent-core/webhooks`
 - `POST /v1/agent-core/webhooks`
+- `GET /v1/agent-core/webhooks/deliveries`
+- `GET /v1/agent-core/webhooks/deliveries/{id}`
+- `POST /v1/agent-core/webhooks/deliveries/{id}/retry`
 - `POST /v1/agent-core/webhooks/{id}/test`
+
+Webhook deliveries are persisted and retried with backoff until max attempts. Failed deliveries remain queryable in `webhook_deliveries`.
+
+Delivery list query params:
+
+- `page` (default `1`)
+- `limit` (default `25`, max `500`)
+- `status` (`pending|retrying|failed|delivered`)
+- `eventType`
+- `query` (matches `id`, `webhook_id`, `event_type`)
+- `sortBy` (`createdAt|status|eventType|attempt|deliveredAt|responseStatus`)
+- `sortOrder` (`asc|desc`)
+
+### Tenant Policies
+
+- `GET /v1/agent-core/policies` (add `?versions=true` to include version history)
+- `PUT /v1/agent-core/policies` to activate a new policy version for the tenant
+
+### Observability
+
+- Request logs are emitted as structured JSON lines.
+- `GET /v1/agent-core/metrics` exposes process + HTTP request counters/latency snapshots.
 
 
 

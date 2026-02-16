@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS tenant_api_keys (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL,
   name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'viewer',
   key_hash TEXT NOT NULL,
   key_prefix TEXT NOT NULL,
   scopes_json TEXT NOT NULL DEFAULT '[]',
@@ -90,6 +91,24 @@ CREATE TABLE IF NOT EXISTS webhook_subscriptions (
 
 CREATE INDEX IF NOT EXISTS idx_webhooks_tenant ON webhook_subscriptions(tenant_id, active);
 
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  webhook_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  attempt INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  response_status INTEGER,
+  response_body TEXT,
+  last_error TEXT,
+  next_retry_at TEXT,
+  created_at TEXT NOT NULL,
+  delivered_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_retry ON webhook_deliveries(tenant_id, status, next_retry_at);
+
 CREATE TABLE IF NOT EXISTS tool_dead_letters (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL,
@@ -99,6 +118,18 @@ CREATE TABLE IF NOT EXISTS tool_dead_letters (
   error TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS tenant_policies (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  policy_json TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_policy_version ON tenant_policies(tenant_id, version);
+CREATE INDEX IF NOT EXISTS idx_tenant_policy_active ON tenant_policies(tenant_id, active);
 `);
 
 function ensureColumn(tableName, columnName, ddl) {
@@ -112,6 +143,7 @@ ensureColumn('workflow_steps', 'attempt', 'attempt INTEGER NOT NULL DEFAULT 1');
 ensureColumn('workflow_runs', 'tenant_id', "tenant_id TEXT NOT NULL DEFAULT 'default'");
 ensureColumn('workflow_steps', 'tenant_id', "tenant_id TEXT NOT NULL DEFAULT 'default'");
 ensureColumn('workflow_events', 'tenant_id', "tenant_id TEXT NOT NULL DEFAULT 'default'");
+ensureColumn('tenant_api_keys', 'role', "role TEXT NOT NULL DEFAULT 'viewer'");
 db.exec(`CREATE INDEX IF NOT EXISTS idx_workflow_runs_tenant ON workflow_runs(tenant_id, created_at DESC)`);
 
 export function getDb() {

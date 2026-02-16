@@ -13,6 +13,10 @@ function keyPrefix(raw) {
   return raw.slice(0, 12);
 }
 
+function normalizeRole(role) {
+  return ['viewer', 'ops', 'admin'].includes(role) ? role : 'viewer';
+}
+
 export function isAuthRequired() {
   return process.env.AGENT_CORE_REQUIRE_AUTH !== 'false';
 }
@@ -33,6 +37,7 @@ export function bootstrapAuthFromEnv() {
   const tenantId = process.env.AGENT_CORE_BOOTSTRAP_TENANT_ID ?? 'default';
   const tenantName = process.env.AGENT_CORE_BOOTSTRAP_TENANT_NAME ?? 'Default Tenant';
   const keyName = process.env.AGENT_CORE_BOOTSTRAP_KEY_NAME ?? 'bootstrap';
+  const role = process.env.AGENT_CORE_BOOTSTRAP_ROLE ?? 'admin';
   ensureTenant(tenantId, tenantName);
 
   const db = getDb();
@@ -47,31 +52,40 @@ export function bootstrapAuthFromEnv() {
 
   db.prepare(`
     INSERT INTO tenant_api_keys
-      (id, tenant_id, name, key_hash, key_prefix, scopes_json, active, created_at)
+      (id, tenant_id, name, role, key_hash, key_prefix, scopes_json, active, created_at)
     VALUES
-      (?, ?, ?, ?, ?, '["*"]', 1, ?)
+      (?, ?, ?, ?, ?, ?, '["*"]', 1, ?)
   `).run(
     crypto.randomUUID(),
     tenantId,
     keyName,
+    normalizeRole(role),
     hashKey(bootstrapKey),
     prefix,
     nowIso()
   );
 }
 
-export function createTenantApiKey({ tenantId, tenantName, keyName, rawKey, scopes = ['*'] }) {
+export function createTenantApiKey({
+  tenantId,
+  tenantName,
+  keyName,
+  rawKey,
+  role = 'viewer',
+  scopes = ['*'],
+}) {
   ensureTenant(tenantId, tenantName ?? tenantId);
   const db = getDb();
   db.prepare(`
     INSERT INTO tenant_api_keys
-      (id, tenant_id, name, key_hash, key_prefix, scopes_json, active, created_at)
+      (id, tenant_id, name, role, key_hash, key_prefix, scopes_json, active, created_at)
     VALUES
-      (?, ?, ?, ?, ?, ?, 1, ?)
+      (?, ?, ?, ?, ?, ?, ?, 1, ?)
   `).run(
     crypto.randomUUID(),
     tenantId,
     keyName,
+    normalizeRole(role),
     hashKey(rawKey),
     keyPrefix(rawKey),
     JSON.stringify(scopes),
@@ -83,6 +97,7 @@ export function authenticateRequest(headers) {
   if (!isAuthRequired()) {
     return {
       tenantId: headers['x-tenant-id'] ?? 'default',
+      role: 'admin',
       scopes: ['*'],
       keyName: 'auth-disabled'
     };
@@ -98,7 +113,7 @@ export function authenticateRequest(headers) {
 
   const db = getDb();
   const record = db.prepare(`
-    SELECT name, key_hash, scopes_json, active
+    SELECT name, role, key_hash, scopes_json, active
     FROM tenant_api_keys
     WHERE tenant_id = ? AND key_prefix = ?
     LIMIT 1
@@ -109,8 +124,18 @@ export function authenticateRequest(headers) {
 
   return {
     tenantId,
+    role: record.role ?? 'viewer',
     scopes: JSON.parse(record.scopes_json ?? '[]'),
     keyName: record.name
   };
 }
 
+const ROLE_RANK = {
+  viewer: 1,
+  ops: 2,
+  admin: 3,
+};
+
+export function hasRole(auth, minimumRole) {
+  return (ROLE_RANK[auth.role] ?? 0) >= (ROLE_RANK[minimumRole] ?? 0);
+}
