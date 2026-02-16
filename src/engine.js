@@ -1,7 +1,6 @@
-import { getAdapter, listAdapters } from './adapters/registry.js';
+import { listAdapters } from './adapters/registry.js';
 import { runDeploymentReadinessAgent } from './agents/deployment-readiness-agent.js';
 import { runIntegrationProgramAgent } from './agents/integration-program-agent.js';
-import { runInvoiceAnomalyAgent } from './agents/invoice-anomaly-agent.js';
 import { runMappingEngineerAgent } from './agents/mapping-engineer-agent.js';
 import { runOnboardingAgent } from './agents/onboarding-agent.js';
 import { runPostProductionEscalationAgent } from './agents/post-production-escalation-agent.js';
@@ -12,7 +11,6 @@ import { runTestCertificationAgent } from './agents/test-certification-agent.js'
 const SUPPORTED_AGENTS = [
   { id: 'integration_program', description: 'Manages implementation portfolio, risks, and delivery plan health' },
   { id: 'onboarding', description: 'Assesses partner readiness and produces onboarding actions' },
-  { id: 'invoice_anomaly', description: 'Detects mismatches between invoice, PO, and shipment notice' },
   { id: 'spec_analysis', description: 'Builds integration specification coverage, risks, and open questions' },
   { id: 'mapping_engineer', description: 'Generates mapping rules, test cases, and deployment sequence' },
   { id: 'test_certification', description: 'Evaluates test evidence and determines certification readiness' },
@@ -61,14 +59,5 @@ export function runAgent(request) {
     return runStandardsArchitectureAgent(request.input);
   }
 
-  const adapter = getAdapter(request.adapter);
-  const invoice = adapter.normalizeDocument(request.input.invoice);
-  const purchaseOrder = request.input.purchaseOrder
-    ? adapter.normalizeDocument(request.input.purchaseOrder)
-    : undefined;
-  const shipmentNotice = request.input.shipmentNotice
-    ? adapter.normalizeDocument(request.input.shipmentNotice)
-    : undefined;
-
-  return runInvoiceAnomalyAgent(invoice, purchaseOrder, shipmentNotice, request.input.tolerance);
+  throw new Error(`Unsupported agent: ${request.agent}`);
 }

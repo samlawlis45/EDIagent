@@ -14,20 +14,6 @@ const runOnboardingSchema = z.object({
   })
 });
 
-const runInvoiceAnomalySchema = z.object({
-  adapter: z.string().min(1),
-  agent: z.literal('invoice_anomaly'),
-  input: z.object({
-    invoice: z.unknown(),
-    purchaseOrder: z.unknown().optional(),
-    shipmentNotice: z.unknown().optional(),
-    tolerance: z.object({
-      amountPercent: z.number().nonnegative().optional(),
-      quantityPercent: z.number().nonnegative().optional()
-    }).optional()
-  })
-});
-
 const runSpecAnalysisSchema = z.object({
   adapter: z.string().min(1),
   agent: z.literal('spec_analysis'),
@@ -214,7 +200,6 @@ const runStandardsArchitectureSchema = z.object({
 
 export const runAgentSchema = z.discriminatedUnion('agent', [
   runOnboardingSchema,
-  runInvoiceAnomalySchema,
   runSpecAnalysisSchema,
   runMappingEngineerSchema,
   runDeploymentReadinessSchema,

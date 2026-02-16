@@ -26,7 +26,6 @@ This lets teams deploy the same agents in their own environment without forcing 
 
 - `integration_program`
 - `onboarding`
-- `invoice_anomaly`
 - `spec_analysis`
 - `mapping_engineer`
 - `test_certification`
